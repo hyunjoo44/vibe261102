@@ -4,7 +4,7 @@ import { buttonVariants } from "@/components/ui/button";
 
 export default function NotFound() {
   return (
-    <div className="flex flex-col items-center gap-4 py-24 text-center">
+    <div className="flex flex-col items-center gap-4 rounded-xl bg-background py-24 text-center">
       <h1 className="text-2xl font-semibold">페이지를 찾을 수 없습니다</h1>
       <p className="text-muted-foreground">삭제되었거나 존재하지 않는 게시글입니다.</p>
       <Link href="/" className={buttonVariants()}>
