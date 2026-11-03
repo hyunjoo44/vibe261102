@@ -8,8 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-
-const CATEGORIES = ["자유", "질문", "정보", "공지"];
+import { CATEGORIES, DEFAULT_CATEGORY } from "@/lib/categories";
 
 type Props = {
   action: (prev: FormState, formData: FormData) => Promise<FormState>;
@@ -36,7 +35,7 @@ export function PostForm({ action, defaults, cancelHref, submitLabel, isEdit }: 
           <select
             id="category"
             name="category"
-            defaultValue={values?.category ?? "자유"}
+            defaultValue={values?.category ?? DEFAULT_CATEGORY}
             className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             {CATEGORIES.map((c) => (

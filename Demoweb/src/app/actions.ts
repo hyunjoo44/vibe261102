@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { isCategory } from "@/lib/categories";
 import {
-  CATEGORIES,
   addComment,
   createPost,
   deleteComment,
@@ -35,7 +35,7 @@ function validatePost(formData: FormData, requireAuthor: boolean) {
   else if (values.title.length > 100) errors.title = "제목은 100자 이내로 입력해 주세요.";
   if (!values.content) errors.content = "내용을 입력해 주세요.";
   if (requireAuthor && !values.author) errors.author = "작성자를 입력해 주세요.";
-  if (!CATEGORIES.includes(values.category as Category))
+  if (!isCategory(values.category))
     errors.category = "카테고리를 선택해 주세요.";
 
   return { values, errors, ok: Object.keys(errors).length === 0 };

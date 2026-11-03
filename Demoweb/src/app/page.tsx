@@ -96,10 +96,10 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
                         {post.category}
                       </Badge>
                       <span className="truncate font-medium">{post.title}</span>
-                      {post.comments.length > 0 && (
+                      {post.commentCount > 0 && (
                         <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
                           <MessageCircle className="size-3" />
-                          {post.comments.length}
+                          {post.commentCount}
                         </span>
                       )}
                     </Link>

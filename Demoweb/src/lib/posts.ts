@@ -1,8 +1,8 @@
 import "server-only";
 
-import { promises as fs } from "fs";
-import path from "path";
-import { randomUUID } from "crypto";
+import { neon } from "@neondatabase/serverless";
+
+import { DEFAULT_CATEGORY, isCategory, type Category } from "@/lib/categories";
 
 export type Comment = {
   id: string;
@@ -23,43 +23,34 @@ export type Post = {
   comments: Comment[];
 };
 
-export const CATEGORIES = ["자유", "질문", "정보", "공지"] as const;
-export type Category = (typeof CATEGORIES)[number];
+export type PostSummary = Omit<Post, "content" | "comments"> & { commentCount: number };
+
+export { CATEGORIES, type Category } from "@/lib/categories";
 
 export const PAGE_SIZE = 10;
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "posts.json");
-
-const SEED: Post[] = [
-  {
-    id: 1,
-    title: "게시판에 오신 것을 환영합니다",
-    content:
-      "Next.js, shadcn/ui, TypeScript로 만든 게시판입니다.\n\n글 작성, 수정, 삭제, 검색, 댓글 기능을 사용해 보세요.",
-    author: "관리자",
-    category: "공지",
-    views: 0,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    comments: [],
-  },
-];
-
-async function readAll(): Promise<Post[]> {
-  try {
-    const raw = await fs.readFile(DATA_FILE, "utf-8");
-    return JSON.parse(raw) as Post[];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await writeAll(SEED);
-    return SEED;
-  }
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL이 설정되지 않았습니다. .env.local을 확인하세요.");
 }
+const sql = neon(process.env.DATABASE_URL);
 
-async function writeAll(posts: Post[]) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(DATA_FILE, JSON.stringify(posts, null, 2), "utf-8");
+type Row = Record<string, unknown>;
+
+const iso = (value: unknown) => new Date(value as string | Date).toISOString();
+
+function toSummary(row: Row): PostSummary {
+  const category = String(row.category);
+  return {
+    id: Number(row.id),
+    title: String(row.title),
+    author: String(row.author),
+    // 이전 분류(자유·질문·정보 등)로 저장된 글은 기본 분류로 표시
+    category: isCategory(category) ? category : DEFAULT_CATEGORY,
+    views: Number(row.views),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    commentCount: Number(row.comment_count ?? 0),
+  };
 }
 
 export async function listPosts({
@@ -71,104 +62,82 @@ export async function listPosts({
   category?: string;
   page?: number;
 }) {
-  const posts = await readAll();
-  const q = query.trim().toLowerCase();
+  const q = query.trim();
+  const pattern = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+  const cat = category || null;
+  const search = q || null;
 
-  const filtered = posts
-    .filter((p) => !category || p.category === category)
-    .filter(
-      (p) =>
-        !q ||
-        p.title.toLowerCase().includes(q) ||
-        p.content.toLowerCase().includes(q) ||
-        p.author.toLowerCase().includes(q)
-    )
-    .sort((a, b) => {
-      // 공지는 항상 상단에 고정
-      if (a.category === "공지" && b.category !== "공지") return -1;
-      if (b.category === "공지" && a.category !== "공지") return 1;
-      return b.id - a.id;
-    });
+  const [{ total }] = await sql`
+    SELECT count(*)::int AS total FROM posts
+    WHERE (${cat}::text IS NULL OR category = ${cat})
+      AND (${search}::text IS NULL OR title ILIKE ${pattern} OR content ILIKE ${pattern} OR author ILIKE ${pattern})`;
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const current = Math.min(Math.max(1, page), totalPages);
 
-  return {
-    posts: filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE),
-    total: filtered.length,
-    page: current,
-    totalPages,
-  };
+  const rows = await sql`
+    SELECT p.id, p.title, p.author, p.category, p.views, p.created_at, p.updated_at,
+           (SELECT count(*) FROM comments c WHERE c.post_id = p.id)::int AS comment_count
+    FROM posts p
+    WHERE (${cat}::text IS NULL OR p.category = ${cat})
+      AND (${search}::text IS NULL OR p.title ILIKE ${pattern} OR p.content ILIKE ${pattern} OR p.author ILIKE ${pattern})
+    ORDER BY (p.category = '공지') DESC, p.id DESC
+    LIMIT ${PAGE_SIZE} OFFSET ${(current - 1) * PAGE_SIZE}`;
+
+  return { posts: rows.map(toSummary), total: Number(total), page: current, totalPages };
 }
 
-export async function getPost(id: number) {
-  const posts = await readAll();
-  return posts.find((p) => p.id === id) ?? null;
+export async function getPost(id: number): Promise<Post | null> {
+  if (!Number.isInteger(id)) return null;
+  const [rows, comments] = await sql.transaction([
+    sql`SELECT * FROM posts WHERE id = ${id}`,
+    sql`SELECT id, author, content, created_at FROM comments WHERE post_id = ${id} ORDER BY created_at`,
+  ]);
+  if (rows.length === 0) return null;
+
+  const { commentCount: _, ...summary } = toSummary(rows[0]);
+  return {
+    ...summary,
+    content: String(rows[0].content),
+    comments: comments.map((c) => ({
+      id: String(c.id),
+      author: String(c.author),
+      content: String(c.content),
+      createdAt: iso(c.created_at),
+    })),
+  };
 }
 
 export async function incrementViews(id: number) {
-  const posts = await readAll();
-  const post = posts.find((p) => p.id === id);
-  if (!post) return;
-  post.views += 1;
-  await writeAll(posts);
+  if (!Number.isInteger(id)) return;
+  await sql`UPDATE posts SET views = views + 1 WHERE id = ${id}`;
 }
 
-export async function createPost(
-  input: Pick<Post, "title" | "content" | "author" | "category">
-) {
-  const posts = await readAll();
-  const now = new Date().toISOString();
-  const post: Post = {
-    ...input,
-    id: posts.reduce((max, p) => Math.max(max, p.id), 0) + 1,
-    views: 0,
-    createdAt: now,
-    updatedAt: now,
-    comments: [],
-  };
-  posts.push(post);
-  await writeAll(posts);
-  return post;
+export async function createPost(input: Pick<Post, "title" | "content" | "author" | "category">) {
+  const [row] = await sql`
+    INSERT INTO posts (title, content, author, category)
+    VALUES (${input.title}, ${input.content}, ${input.author}, ${input.category})
+    RETURNING id`;
+  return { id: Number(row.id) };
 }
 
-export async function updatePost(
-  id: number,
-  input: Pick<Post, "title" | "content" | "category">
-) {
-  const posts = await readAll();
-  const post = posts.find((p) => p.id === id);
-  if (!post) return null;
-  Object.assign(post, input, { updatedAt: new Date().toISOString() });
-  await writeAll(posts);
-  return post;
+export async function updatePost(id: number, input: Pick<Post, "title" | "content" | "category">) {
+  await sql`
+    UPDATE posts
+    SET title = ${input.title}, content = ${input.content}, category = ${input.category}, updated_at = now()
+    WHERE id = ${id}`;
 }
 
 export async function deletePost(id: number) {
-  const posts = await readAll();
-  await writeAll(posts.filter((p) => p.id !== id));
+  await sql`DELETE FROM posts WHERE id = ${id}`;
 }
 
-export async function addComment(
-  postId: number,
-  input: Pick<Comment, "author" | "content">
-) {
-  const posts = await readAll();
-  const post = posts.find((p) => p.id === postId);
-  if (!post) return null;
-  post.comments.push({
-    ...input,
-    id: randomUUID(),
-    createdAt: new Date().toISOString(),
-  });
-  await writeAll(posts);
-  return post;
+export async function addComment(postId: number, input: Pick<Comment, "author" | "content">) {
+  await sql`
+    INSERT INTO comments (post_id, author, content)
+    SELECT id, ${input.author}, ${input.content} FROM posts WHERE id = ${postId}`;
 }
 
 export async function deleteComment(postId: number, commentId: string) {
-  const posts = await readAll();
-  const post = posts.find((p) => p.id === postId);
-  if (!post) return;
-  post.comments = post.comments.filter((c) => c.id !== commentId);
-  await writeAll(posts);
+  await sql`DELETE FROM comments WHERE id = ${commentId}::uuid AND post_id = ${postId}`;
 }
