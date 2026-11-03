@@ -12,6 +12,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8000", "--directory", "DemoPort"],
       "port": 8000
+    },
+    {
+      "name": "demoweb",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "Demoweb", "run", "dev", "--", "-p", "3100"],
+      "port": 3100
     }
   ]
 }
