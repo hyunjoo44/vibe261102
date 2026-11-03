@@ -1,0 +1,10 @@
+# PyInstaller 빌드 결과물
+build/
+dist/
+*.spec
+__pycache__/
+
+# 크롤러 실행 결과물
+article.txt
+*.csv
+*.xlsx
